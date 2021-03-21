@@ -11,6 +11,27 @@ from aiohttp import ClientSession
 from providers import db, Provider, merriam, datamuse, wordnik, Definition
 
 
+async def fetch_from_dictionaries(term):
+    db_provider, provider_list = providers[0], providers[1:]
+
+    suggestion = None
+    results = await db_provider.fetch(term)
+    if not results:
+        results = temp_results = []
+        for provider in provider_list:
+            temp_results = await provider.fetch(term)
+            if temp_results:
+                break
+        for d in temp_results:
+            if isinstance(d, str) and not suggestion:  # save topmost suggestion
+                suggestion = d
+            else:
+                results.append(d)
+                await db_provider.store(d)
+
+    return results, suggestion
+
+
 @telethon.events.register(telethon.events.InlineQuery())
 async def inline_handler(event: telethon.events.InlineQuery.Event):
     if not event.text:
@@ -18,29 +39,15 @@ async def inline_handler(event: telethon.events.InlineQuery.Event):
 
     logger.info("Inline query %d: text='%s'", event.id, event.text)
 
-    db_provider, provider_list = providers[0], providers[1:]
-
-    suggestion = None
-    results = await db_provider.fetch(event.text)
-    usuable_results = []
-    if not results:
-        for provider in provider_list[1:]:
-            results = await provider.fetch(event.text)
-            if results:
-                break
-        for d in results:
-            if isinstance(d, str) and not suggestion:  # save topmost suggestion
-                suggestion = d
-            else:
-                usuable_results.append(d)
-                await db_provider.store(d)
+    results, suggestion = await fetch_from_dictionaries(event.text)
 
     logger.debug("Inline query %d: Processed %d results", event.id, len(results))
 
     if not results:
-        results = (Definition(event.text, 'Unknown type', 'Not found.'),)
+        definition = 'Not found.'
         if suggestion:
-            results[0].definition += f' Did you mean "{suggestion}"?'
+            definition += f' Did you mean "{suggestion}"?'
+        results = (Definition(event.text, 'Unknown type', definition),)
 
     try:
         results = [await event.builder.article(d.term, d.definition, text=str(d), parse_mode='HTML') for d in results]
@@ -79,7 +86,7 @@ async def main():
 
     await bot.connect()
     if not await bot.is_user_authorized() or not await bot.is_bot():
-        await bot.start(bot_token=config['TG API']['bot_token'])
+        await bot.start(bot_token=config['TG API']['bot_token'])  # noqa (telethon's hack)
     logger.info('Started bot')
 
     try:
@@ -90,34 +97,44 @@ async def main():
         await http.close()
 
 
-if __name__ == '__main__':
+def get_config():
     if not os.path.exists('config.ini'):
         raise FileNotFoundError('config.ini not found. Please copy example-config.ini and edit the relevant values')
-    config = configparser.ConfigParser()
-    config.read_file(open('config.ini'))
+    c = configparser.ConfigParser()
+    c.read_file(open('config.ini'))
+    return c
 
-    CACHE_TIME = config['TG API'].getint('cache_time')
-    LOG_FILE = config['main'].get('log file', 'logs/bot.log')
 
-    logger = logging.getLogger()
-    level = getattr(logging, config['main']['logging level'], logging.INFO)
-    logger.setLevel(level)
+def init_logging(level, file):
+    l = logging.getLogger()
+    level = getattr(logging, level, logging.INFO)
+    l.setLevel(level)
     if not os.path.exists('logs'):
         os.mkdir('logs', 0o770)
-    h = logging.handlers.RotatingFileHandler(LOG_FILE, encoding='utf-8', maxBytes=5 * 1024 * 1024, backupCount=5)
+    h = logging.handlers.RotatingFileHandler(file, encoding='utf-8', maxBytes=5 * 1024 * 1024, backupCount=5)
     h.setFormatter(logging.Formatter("%(asctime)s\t%(levelname)s:%(message)s"))
     h.setLevel(level)
-    logger.addHandler(h)
+    l.addHandler(h)
     if os.getenv('DOCKER', False):  # we are in docker, use stdout as well
-        logger.addHandler(logging.StreamHandler(sys.stdout))
+        l.addHandler(logging.StreamHandler(sys.stdout))
+    return l
 
-    providers: Sequence[Provider] = (
-        db.DBProvider(config['mysql']),
-        merriam.MerriamProvider(config['merriam']),
-        wordnik.WordnikProvider(config['wordnik']),
-        datamuse.DatamuseProvider(config['datamuse'])
-    )
 
+config = get_config()
+
+CACHE_TIME = config['TG API'].getint('cache_time')
+LOG_FILE = config['main'].get('log file', 'logs/bot.log')
+
+logger = init_logging(config['main']['logging level'], LOG_FILE)
+
+providers: Sequence[Provider] = (
+    db.MySqlDBProvider(config['mysql']) if config['main']['dbengine'] == 'mysql' else db.SqliteDBProvider(config['sqlite']),
+    merriam.MerriamProvider(config['merriam']),
+    wordnik.WordnikProvider(config['wordnik']),
+    datamuse.DatamuseProvider(config['datamuse'])
+)
+
+if __name__ == '__main__':
     bot = telethon.TelegramClient(config['TG API']['session'],
                                   config['TG API'].getint('api_id'), config['TG API']['api_hash'],
                                   auto_reconnect=True, connection_retries=1000)

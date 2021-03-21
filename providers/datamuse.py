@@ -6,7 +6,7 @@ from . import Provider, Definition
 class DatamuseProvider(Provider):
     def __init__(self, config):
         super().__init__(config)
-        self._max_results = config.get('max results', 50)
+        self._max_results = config.getint('max results', fallback=50)
         self._result_score_threshold = config.get('result score threshold', 500)
         self._url = 'https://api.datamuse.com/words?'
 

@@ -2,7 +2,9 @@
 /config.ini
 .idea
 .vscode
-logs/
+/logs
+*.sqlite3
+*.sqlite
 
 ### Python template
 # Byte-compiled / optimized / DLL files

@@ -9,17 +9,17 @@ class WordnikProvider(Provider):
         self._part_of_speech_map = {
             'adjective': 'adj',
             'abbreviation': 'abbr',
-            **{x: 'n' for x in ('noun', 'pronoun', 'noun-possesive', 'noun-plural', 'proper-noun',
-                                'proper-noun-plural', 'proper-noun-possessive')},
+            **{x: 'n' for x in ('noun', 'pronoun', 'noun-plural', 'proper-noun',
+                                'proper-noun-plural')},
             **{x: 'v' for x in ('verb', 'past-participle', 'auxiliary-verb', 'verb-transitive',
                                 'verb-intransitive', 'imperative')}
         }
         self._params = {
-            'key': config['key'],
-            'useCanonical': True,
+            'api_key': config['key'],
+            'useCanonical': 'true',
             'partOfSpeech': ','.join(self._part_of_speech_map.keys())
         }
-        self._max_results = config.get('max results', 0)
+        self._max_results = config.getint('max results', fallback=0)
 
     async def init(self, *args, http_session, **kwargs):
         self._session = http_session
